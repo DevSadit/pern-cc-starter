@@ -1,4 +1,7 @@
-import express, { response } from "express";
+import express from "express";
+import { eq } from "drizzle-orm";
+import { db } from "../03_postgresql/db.js";
+import { cars } from "../03_postgresql/schema.js";
 
 const app = express();
 const port = 3000;
@@ -13,11 +16,6 @@ app.use((req, res, next) => {
 
   next();
 });
-let cars = [
-  { id: 1, make: "Toyota", model: "Camry", year: 2022, price: 28000 },
-  { id: 2, make: "Tesla", model: "Model S", year: 2023, price: 25000 },
-  { id: 3, make: "Ford", model: "F-150", year: 2021, price: 35000 },
-];
 
 // server home...
 app.get("/", (req, res) => {
@@ -25,69 +23,110 @@ app.get("/", (req, res) => {
 });
 
 // get all the cars
-router.get("/", (req, res) => {
-  res.json(cars);
+router.get("/", async (req, res, next) => {
+  try {
+    const allCars = await db.select().from(cars);
+    res.json(allCars);
+  } catch (error) {
+    next(error);
+  }
 });
 
 // post a car in db
-router.post("/", (req, res) => {
+router.post("/", async (req, res, next) => {
   const { make, model, year, price } = req.body;
 
   if (!make || !model || !year || !price) {
-    return res.status(404).json({ error: "missing feilds" });
+    return res.status(400).json({ error: "missing fields" });
   }
 
-  const newCar = {
-    id: cars.length + 1,
-    make,
-    model,
-    year: Number(year),
-    price: Number(price),
-  };
+  try {
+    const [newCar] = await db
+      .insert(cars)
+      .values({
+        make,
+        model,
+        year: Number(year),
+        price: String(price),
+      })
+      .returning();
 
-  cars.push(newCar);
-  res.status(201).json(newCar);
+    res.status(201).json(newCar);
+  } catch (error) {
+    next(error);
+  }
 });
 
 // update the specific car info
-router.put("/:id", (req, res) => {
+router.put("/:id", async (req, res, next) => {
   const id = Number(req.params.id);
-  const idx = cars.findIndex((c) => c.id === id);
-
-  if (idx === -1) return res.status(404).send("Car Not Found!");
-
   const { make, model, year, price } = req.body;
 
-  if (make) cars[idx].make = make;
-  if (model) cars[idx].model = model;
-  if (year) cars[idx].year = Number(year);
-  if (price) cars[idx].price = Number(price);
+  try {
+    const updates = {};
 
-  res.json(cars[idx]);
+    if (make) updates.make = make;
+    if (model) updates.model = model;
+    if (year) updates.year = Number(year);
+    if (price) updates.price = String(price);
+
+    const [updatedCar] = await db
+      .update(cars)
+      .set(updates)
+      .where(eq(cars.id, id))
+      .returning();
+
+    if (!updatedCar) {
+      return res.status(404).json({ error: "Car not found" });
+    }
+
+    res.json(updatedCar);
+  } catch (error) {
+    next(error);
+  }
 });
 
-router.delete("/:id", (req, res) => {
+// delete the specific car
+router.delete("/:id", async (req, res, next) => {
   const id = Number(req.params.id);
-  const idx = cars.findIndex((c) => c.id === id);
 
-  if (idx === -1) {
-    return res.status(404).json({ erro: "Car Not Found" });
+  try {
+    const [deletedCar] = await db
+      .delete(cars)
+      .where(eq(cars.id, id))
+      .returning();
+
+    if (!deletedCar) {
+      return res.status(404).json({ error: "Car not found" });
+    }
+
+    res.json({ message: "Car deleted successfully", car: deletedCar });
+  } catch (error) {
+    next(error);
   }
-  const deleted = cars.splice(idx, 1)[0];
-  res.json({ message: "Car Deleted Succesfully..", car: deleted });
 });
 
 // get a specific car
-router.get("/:id", (req, res) => {
+router.get("/:id", async (req, res, next) => {
   const id = Number(req.params.id);
-  const car = cars.find((car) => car.id === id);
 
-  if (!car) return res.status(404).send("Car Not Found!");
+  try {
+    const [car] = await db.select().from(cars).where(eq(cars.id, id));
 
-  res.json(car);
+    if (!car) return res.status(404).send("Car Not Found!");
+
+    res.json(car);
+  } catch (error) {
+    next(error);
+  }
 });
 
 app.use("/api/v1/cars", router);
+
+app.use((error, req, res, next) => {
+  console.error(error);
+  res.status(500).json({ error: "Something went wrong" });
+});
 
 app.listen(port, () => {
   console.log(`server is running on: http://localhost:${port}`);
